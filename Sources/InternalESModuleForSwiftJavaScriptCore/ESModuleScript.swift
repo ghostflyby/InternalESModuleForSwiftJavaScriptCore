@@ -14,7 +14,7 @@ private let jsScriptClass: AnyClass = {
 public struct ESModuleScript {
   let object: AnyObject
   public init(
-    withSource: String, andSourceURL: URL, andBytecodeCache: URL,
+    withSource: String, andSourceURL: URL, andBytecodeCache: URL?,
     inVirtualMachine: JSVirtualMachine
   ) throws(ESModuleError) {
     var error: NSError?
