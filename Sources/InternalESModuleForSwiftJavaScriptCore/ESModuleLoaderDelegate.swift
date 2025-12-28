@@ -2,57 +2,21 @@ import Foundation
 import JavaScriptCore
 import ObjectiveC.runtime
 
-private typealias ObjCModuleLoaderDelegate = NSObject
-
-public struct ESModuleLoaderDelegate {
-  fileprivate let object: ObjCModuleLoaderDelegate
-
-  fileprivate init(object: ObjCModuleLoaderDelegate) {
-    self.object = object
-  }
-
-  public init?(bridging object: AnyObject) {
-    guard let delegate = object as? ObjCModuleLoaderDelegate else { return nil }
-    guard delegate.responds(to: fetchModuleSelector) else { return nil }
-    self.object = delegate
-  }
-}
-
-extension ESModuleLoaderDelegate {
-  public func fetchModule(
+public protocol ESModuleLoaderDelegate: AnyObject {
+  /// If your delegate keeps a reference to JSContext, prefer a weak reference to avoid cycles.
+  func fetchModule(
     in context: JSContext,
     identifier: JSValue,
     resolve: JSValue,
     reject: JSValue
-  ) {
-    moduleFetchIMP(object, fetchModuleSelector, context, identifier, resolve, reject)
-  }
+  )
+  func willEvaluateModule(at key: URL)
+  func didEvaluateModule(at key: URL)
+}
 
-  public func willEvaluateModule(at key: URL) {
-    invokeLifecycleSelector(willEvaluateSelector, with: key)
-  }
-
-  public func didEvaluateModule(at key: URL) {
-    invokeLifecycleSelector(didEvaluateSelector, with: key)
-  }
-
-  private var moduleFetchIMP: ModuleFetchIMP {
-    guard let method = object.method(for: fetchModuleSelector) else {
-      preconditionFailure("moduleLoaderDelegate missing required fetch implementation")
-    }
-    return unsafeBitCast(method, to: ModuleFetchIMP.self)
-  }
-
-  private func invokeLifecycleSelector(_ selector: Selector, with key: URL) {
-    guard let imp = lifecycleIMP(for: selector) else { return }
-    imp(object, selector, key as NSURL)
-  }
-
-  private func lifecycleIMP(for selector: Selector) -> ModuleLifecycleIMP? {
-    guard object.responds(to: selector) else { return nil }
-    guard let method = object.method(for: selector) else { return nil }
-    return unsafeBitCast(method, to: ModuleLifecycleIMP.self)
-  }
+extension ESModuleLoaderDelegate {
+  public func willEvaluateModule(at key: URL) {}
+  public func didEvaluateModule(at key: URL) {}
 }
 
 extension JSContext {
@@ -60,78 +24,55 @@ extension JSContext {
   public var moduleLoaderDelegate: ESModuleLoaderDelegate? {
     get {
       guard let obj = loaderGetterIMP(self, loaderGetterSelector) else { return nil }
-      guard let delegate = obj as? ObjCModuleLoaderDelegate else {
-        preconditionFailure("moduleLoaderDelegate must inherit from NSObject")
-      }
-      return ESModuleLoaderDelegate(object: delegate)
+      guard let bridge = obj as? SwiftModuleLoaderDelegateBridge else { return nil }
+      return bridge.delegate
     }
     set {
-      loaderSetterIMP(self, loaderSetterSelector, newValue?.object)
+      if let delegate = newValue {
+        let bridge = SwiftModuleLoaderDelegateBridge(delegate: delegate)
+        loaderSetterIMP(self, loaderSetterSelector, bridge)
+      } else {
+        loaderSetterIMP(self, loaderSetterSelector, nil)
+      }
     }
   }
 }
 
 private let loaderGetterSelector = Selector(("moduleLoaderDelegate"))
 private let loaderSetterSelector = Selector(("setModuleLoaderDelegate:"))
-private let fetchModuleSelector = Selector(
-  ("context:fetchModuleForIdentifier:withResolveHandler:andRejectHandler:"))
-private let willEvaluateSelector = Selector(("willEvaluateModule:"))
-private let didEvaluateSelector = Selector(("didEvaluateModule:"))
 
 private typealias ModuleLoaderDelegateGetterIMP =
   @convention(c) (AnyObject, Selector) -> AnyObject?
 private typealias ModuleLoaderDelegateSetterIMP =
   @convention(c) (AnyObject, Selector, AnyObject?) -> Void
 
-private typealias ModuleFetchIMP =
-  @convention(c) (
-    AnyObject,
-    Selector,
-    JSContext,
-    JSValue,
-    JSValue,
-    JSValue
-  ) -> Void
+private final class SwiftModuleLoaderDelegateBridge: NSObject {
+  let delegate: ESModuleLoaderDelegate
 
-private typealias ModuleLifecycleIMP =
-  @convention(c) (
-    AnyObject,
-    Selector,
-    NSURL
-  ) -> Void
-
-/// Accessor helpers for the private JSModuleLoaderDelegate plumbing on JSContext.
-enum JSModuleLoaderDelegateBridge {
-  private static let getterSelector = Selector(("moduleLoaderDelegate"))
-  private static let setterSelector = Selector(("setModuleLoaderDelegate:"))
-
-  private static let getter: DelegateGetter = {
-    guard let method = class_getInstanceMethod(JSContext.self, getterSelector) else {
-      preconditionFailure("JSContext missing moduleLoaderDelegate getter")
-    }
-    let implementation = method_getImplementation(method)
-    return unsafeBitCast(implementation, to: DelegateGetter.self)
-  }()
-
-  private static let setter: DelegateSetter = {
-    guard let method = class_getInstanceMethod(JSContext.self, setterSelector) else {
-      preconditionFailure("JSContext missing moduleLoaderDelegate setter")
-    }
-    let implementation = method_getImplementation(method)
-    return unsafeBitCast(implementation, to: DelegateSetter.self)
-  }()
-
-  static func currentDelegate(in context: JSContext) -> AnyObject? {
-    getter(context, getterSelector)
+  init(delegate: ESModuleLoaderDelegate) {
+    self.delegate = delegate
   }
 
-  static func setDelegate(_ delegate: AnyObject?, for context: JSContext) {
-    setter(context, setterSelector, delegate)
+  @objc(context:fetchModuleForIdentifier:withResolveHandler:andRejectHandler:)
+  func fetchModule(
+    in context: JSContext,
+    identifier: JSValue,
+    resolve: JSValue,
+    reject: JSValue
+  ) {
+    delegate.fetchModule(in: context, identifier: identifier, resolve: resolve, reject: reject)
+  }
+
+  @objc(willEvaluateModule:)
+  func willEvaluateModule(_ key: NSURL) {
+    delegate.willEvaluateModule(at: key as URL)
+  }
+
+  @objc(didEvaluateModule:)
+  func didEvaluateModule(_ key: NSURL) {
+    delegate.didEvaluateModule(at: key as URL)
   }
 }
-
-private typealias DelegateGetter = @convention(c) (AnyObject, Selector) -> AnyObject?
-private typealias DelegateSetter = @convention(c) (AnyObject, Selector, AnyObject?) -> Void
 
 private let loaderGetterIMP: ModuleLoaderDelegateGetterIMP = {
   guard let method = class_getInstanceMethod(JSContext.self, loaderGetterSelector) else {
