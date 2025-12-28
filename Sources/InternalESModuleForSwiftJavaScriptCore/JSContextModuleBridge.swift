@@ -22,14 +22,14 @@ private let dependenciesIMP: ModuleDependenciesIMP = {
 }()
 
 extension JSContext {
-  func evaluate(esModule: ESModuleScript) throws -> JSValue {
+  public func evaluate(esModule: ESModuleScript) throws -> JSValue {
     guard let value = evaluateIMP(self, evaluateSelector, esModule.object) else {
       throw ESModuleError.evaluationFailed("evaluateJSScript: returned nil")
     }
     return value
   }
 
-  func moduleDependencyIdentifiers(for esModule: ESModuleScript) throws -> JSValue {
+  public func moduleDependencyIdentifiers(for esModule: ESModuleScript) throws -> JSValue {
     guard let value = dependenciesIMP(self, dependenciesSelector, esModule.object) else {
       throw ESModuleError.dependencyLookupFailed(
         "dependencyIdentifiersForModuleJSScript: returned nil")
