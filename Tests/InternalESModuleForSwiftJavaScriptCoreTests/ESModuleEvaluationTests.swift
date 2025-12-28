@@ -73,6 +73,38 @@ func evaluateModuleWithImport() async throws {
   #expect(result == 42)
 }
 
+@Test
+func evaluateModuleWithCustomSchemeImport() async throws {
+  let dep = makeModuleSource(
+    urlString: "app://dep.js",
+    source: "export const answer = 42;"
+  )
+  let main = makeModuleSource(
+    urlString: "app://main.js",
+    source: "import { answer } from 'app://dep.js'; globalThis.result = answer;"
+  )
+  let loader = TestModuleLoader(modulesBySpecifier: [
+    "app://dep.js": dep,
+    "app://main.js": main,
+  ])
+
+  let context = JSContext(virtualMachine: JSVirtualMachine())!
+  context.moduleLoaderDelegate = loader
+
+  let script = try ESModuleScript(
+    withSource: main.source,
+    andSourceURL: main.url,
+    andBytecodeCache: nil,
+    inVirtualMachine: context.virtualMachine
+  )
+  let promise = try context.evaluate(esModule: script)
+  try await awaitPromise(promise, in: context)
+
+  #expect(context.exception == nil)
+  let result = context.objectForKeyedSubscript("result")?.toInt32()
+  #expect(result == 42)
+}
+
 private struct ModuleSource {
   let source: String
   let url: URL
@@ -110,6 +142,11 @@ private func awaitPromise(_ value: JSValue, in context: JSContext) async throws 
 
 private func makeModuleSource(name: String, source: String, baseURL: URL) -> ModuleSource {
   let url = baseURL.appendingPathComponent(name)
+  return ModuleSource(source: source, url: url)
+}
+
+private func makeModuleSource(urlString: String, source: String) -> ModuleSource {
+  let url = URL(string: urlString) ?? URL(fileURLWithPath: urlString)
   return ModuleSource(source: source, url: url)
 }
 
