@@ -113,7 +113,7 @@ private func makeModuleSource(name: String, source: String, baseURL: URL) -> Mod
   return ModuleSource(source: source, url: url)
 }
 
-private final class TestModuleLoader: NSObject, ESModuleLoaderDelegate {
+private final class TestModuleLoader: ESModuleLoaderDelegate {
   private let modulesBySpecifier: [String: ModuleSource]
 
   init(modulesBySpecifier: [String: ModuleSource]) {
@@ -122,16 +122,15 @@ private final class TestModuleLoader: NSObject, ESModuleLoaderDelegate {
 
   func fetchModule(
     in context: JSContext,
-    identifier: JSValue,
-    resolve: JSValue,
-    reject: JSValue
+    identifier: String,
+    resolve: @escaping (ESModuleScript) -> Void,
+    reject: @escaping (JSValue) -> Void
   ) {
-    guard let specifier = identifier.toString() else {
-      reject.call(withArguments: ["Missing module identifier"])
-      return
-    }
-    guard let module = resolveModule(for: specifier) else {
-      reject.call(withArguments: ["Unknown module identifier: \(specifier)"])
+    guard let module = resolveModule(for: identifier, modulesBySpecifier: modulesBySpecifier)
+    else {
+      let error = JSValue(
+        newErrorFromMessage: "Unknown module identifier: \(identifier)", in: context)!
+      reject(error)
       return
     }
     do {
@@ -141,34 +140,37 @@ private final class TestModuleLoader: NSObject, ESModuleLoaderDelegate {
         andBytecodeCache: nil,
         inVirtualMachine: context.virtualMachine
       )
-      let moduleValue = JSValue(object: script.object, in: context)
-      resolve.call(withArguments: [moduleValue as Any])
+      resolve(script)
     } catch {
-      reject.call(withArguments: ["\(error)"])
+      let errorValue = JSValue(newErrorFromMessage: "\(error)", in: context)!
+      reject(errorValue)
     }
   }
+}
 
-  private func resolveModule(for specifier: String) -> ModuleSource? {
-    if let direct = modulesBySpecifier[specifier] {
+private func resolveModule(
+  for specifier: String,
+  modulesBySpecifier: [String: ModuleSource]
+) -> ModuleSource? {
+  if let direct = modulesBySpecifier[specifier] {
+    return direct
+  }
+  if specifier.hasPrefix("./") {
+    let stripped = String(specifier.dropFirst(2))
+    if let direct = modulesBySpecifier[stripped] {
       return direct
     }
-    if specifier.hasPrefix("./") {
-      let stripped = String(specifier.dropFirst(2))
-      if let direct = modulesBySpecifier[stripped] {
-        return direct
-      }
-    }
-    if let url = URL(string: specifier) {
-      if let direct = modulesBySpecifier[url.absoluteString] {
-        return direct
-      }
-      if let direct = modulesBySpecifier[url.path] {
-        return direct
-      }
-      if let direct = modulesBySpecifier[url.lastPathComponent] {
-        return direct
-      }
-    }
-    return nil
   }
+  if let url = URL(string: specifier) {
+    if let direct = modulesBySpecifier[url.absoluteString] {
+      return direct
+    }
+    if let direct = modulesBySpecifier[url.path] {
+      return direct
+    }
+    if let direct = modulesBySpecifier[url.lastPathComponent] {
+      return direct
+    }
+  }
+  return nil
 }
